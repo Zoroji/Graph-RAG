@@ -1,13 +1,30 @@
+# Python environments
+.venv/
+.venv*/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+
 # Environment variables and secrets
 .env
 .env.*
 !.env.example
+**/.env
+**/.env.*
+!**/.env.example
 
-# Python
-__pycache__/
-*.py[cod]
-.venv/
+# Persistent RAG and GraphRAG databases
+**/rag_store/
+**/graph_store/
+**/chroma_db/
+**/chroma/
 
-# Local RAG data
-rag_store/
-chroma_db/
+# # Downloaded transcript datasets
+# **/transcripts/
+
+# Streamlit secrets
+**/.streamlit/secrets.toml
