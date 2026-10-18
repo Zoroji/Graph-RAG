@@ -20,13 +20,23 @@ ASSETS_DIR = BASE_DIR / "assets"
 TRANSCRIPTS_DIR = BASE_DIR / "transcripts"
 TRANSCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
 
-# ─── Page Config ──────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="Vector RAG - Podcast Intelligence",
-    page_icon=":material/dataset:",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+try:
+    if hasattr(st, "secrets"):
+        for k, v in st.secrets.items():
+            if isinstance(v, str) and k not in os.environ:
+                os.environ[k] = v
+except Exception:
+    pass
+
+try:
+    st.set_page_config(
+        page_title="Vector RAG - Podcast Intelligence",
+        page_icon=":material/dataset:",
+        layout="wide",
+        initial_sidebar_state="expanded",
+    )
+except Exception:
+    pass
 
 # ─── CSS Design System (Vector RAG Theme: Indigo & Slate) ──────────────────────
 st.markdown("""
@@ -197,11 +207,11 @@ st.markdown("""
 # ─── Session State Initialization ─────────────────────────────────────────────
 def init_state():
     defaults = {
-        "messages": [],
-        "rag": None,
-        "ingested": False,
-        "ingest_stats_list": [],
-        "active_sources": [],
+        "vrag_messages": [],
+        "vrag": None,
+        "vrag_ingested": False,
+        "vrag_stats_list": [],
+        "vrag_active_sources": [],
         "groq_api_key_input": os.getenv("groq_api_key", "") or os.getenv("GROQ_API_KEY", ""),
         "persist_dir": str(Path(tempfile.gettempdir()) / f"rag_store_{uuid.uuid4().hex}"),
         "srt_current_file": None,
@@ -268,7 +278,7 @@ def call_llm(messages: list, context: str, api_key: str) -> str:
     """Generate an answer using Groq."""
     from groq import Groq
 
-    active_sources = st.session_state.get("active_sources", [])
+    active_sources = st.session_state.get("vrag_active_sources", [])
     num_sources = len(active_sources)
     source_list = ", ".join(active_sources) if active_sources else "unknown"
 
@@ -303,7 +313,7 @@ TRANSCRIPT EXCERPTS:
 
     client = Groq(api_key=api_key.strip())
     response = client.chat.completions.create(
-        model=os.getenv("GROQ_MODEL", "openai/gpt-oss-20b"),
+        model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
         messages=[{"role": "system", "content": system_prompt}] + conversation,
         max_tokens=1024,
         temperature=0.3,
@@ -314,9 +324,9 @@ TRANSCRIPT EXCERPTS:
 # ─── Ingestion Helper ─────────────────────────────────────────────────────────
 def run_ingest(file_path: Path, chunk_size: int, overlap: int, top_k: int, top_n: int):
     """Ingest a single transcript file into the PodcastRAG vector index."""
-    if st.session_state.rag is None:
+    if st.session_state.vrag is None:
         from rag_pipeline import PodcastRAG
-        st.session_state.rag = PodcastRAG(
+        st.session_state.vrag = PodcastRAG(
             persist_dir=st.session_state.persist_dir,
             chunk_size=chunk_size,
             overlap=overlap,
@@ -324,10 +334,10 @@ def run_ingest(file_path: Path, chunk_size: int, overlap: int, top_k: int, top_n
             top_n_rerank=top_n,
         )
 
-    stats = st.session_state.rag.ingest(str(file_path))
-    st.session_state.ingest_stats_list.append(stats)
-    st.session_state.ingested = bool(st.session_state.rag._ingested_sources)
-    st.session_state.active_sources = list(st.session_state.rag._ingested_sources.keys())
+    stats = st.session_state.vrag.ingest(str(file_path))
+    st.session_state.vrag_stats_list.append(stats)
+    st.session_state.vrag_ingested = bool(st.session_state.vrag._ingested_sources)
+    st.session_state.vrag_active_sources = list(st.session_state.vrag._ingested_sources.keys())
     return stats
 
 
@@ -374,7 +384,7 @@ with st.sidebar:
     )
 
     if uploaded_files:
-        already = set(st.session_state.active_sources)
+        already = set(st.session_state.vrag_active_sources)
         pending = [f for f in uploaded_files if Path(f.name).stem not in already]
         btn_label = f"Process {len(pending)} New Transcript(s)" if pending else "All Uploads Loaded"
 
@@ -395,19 +405,19 @@ with st.sidebar:
             st.success(f"{len(new_stats)} transcript(s) added to vector index")
             st.rerun()
 
-    if st.session_state.active_sources:
+    if st.session_state.vrag_active_sources:
         st.divider()
         st.markdown("### Active Vector Sources")
-        for src in st.session_state.active_sources:
+        for src in st.session_state.vrag_active_sources:
             st.markdown(f'<span class="source-tag">{src}</span>', unsafe_allow_html=True)
 
-    if st.session_state.ingest_stats_list:
+    if st.session_state.vrag_stats_list:
         st.divider()
         st.markdown("### Vector Index Stats")
-        total_chunks = sum(s.get("chunks", 0) for s in st.session_state.ingest_stats_list)
+        total_chunks = sum(s.get("chunks", 0) for s in st.session_state.vrag_stats_list)
         col_s1, col_s2 = st.columns(2)
         col_s1.markdown(
-            f'<div class="stat-box"><div class="stat-number">{len(st.session_state.active_sources)}</div>'
+            f'<div class="stat-box"><div class="stat-number">{len(st.session_state.vrag_active_sources)}</div>'
             '<div class="stat-label">Documents</div></div>',
             unsafe_allow_html=True,
         )
@@ -420,14 +430,14 @@ with st.sidebar:
     st.divider()
     col_btn_a, col_btn_b = st.columns(2)
     if col_btn_a.button("Clear Chat", use_container_width=True):
-        st.session_state.messages = []
+        st.session_state.vrag_messages = []
         st.rerun()
     if col_btn_b.button("Reset Index", use_container_width=True):
-        st.session_state.messages = []
-        st.session_state.rag = None
-        st.session_state.ingested = False
-        st.session_state.ingest_stats_list = []
-        st.session_state.active_sources = []
+        st.session_state.vrag_messages = []
+        st.session_state.vrag = None
+        st.session_state.vrag_ingested = False
+        st.session_state.vrag_stats_list = []
+        st.session_state.vrag_active_sources = []
         st.session_state.persist_dir = str(Path(tempfile.gettempdir()) / f"rag_store_{uuid.uuid4().hex}")
         st.rerun()
 
@@ -465,7 +475,7 @@ if current_page == "Vector RAG Assistant":
         """)
 
     # When no documents are ingested yet
-    if not st.session_state.ingested:
+    if not st.session_state.vrag_ingested:
         st.markdown("---")
         st.info("No transcripts currently loaded in the vector index. You can load available SRT transcripts below or upload in the sidebar.")
 
@@ -492,13 +502,13 @@ if current_page == "Vector RAG Assistant":
         c3.markdown("**3. Grounded Chat**\n\nAsk questions with precise source citations and timestamped playback intervals.")
 
     else:
-        sources = st.session_state.active_sources
+        sources = st.session_state.vrag_active_sources
         src_str = " · ".join(f"`{s}`" for s in sources)
         st.markdown(f"**Indexed Sources ({len(sources)}):** {src_str}")
         st.markdown("---")
 
         # Chat Message History
-        for msg in st.session_state.messages:
+        for msg in st.session_state.vrag_messages:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
                 if msg["role"] == "assistant" and msg.get("sources"):
@@ -516,7 +526,7 @@ if current_page == "Vector RAG Assistant":
                             )
 
         # Suggested Starters
-        if not st.session_state.messages:
+        if not st.session_state.vrag_messages:
             st.markdown("**Suggested Queries:**")
             suggestions = [
                 "What are the central themes discussed across all episodes?",
@@ -527,13 +537,13 @@ if current_page == "Vector RAG Assistant":
             cols = st.columns(2)
             for i, sug in enumerate(suggestions):
                 if cols[i % 2].button(sug, key=f"sug_{i}", use_container_width=True):
-                    st.session_state["_prefill"] = sug
+                    st.session_state["vrag_prefill"] = sug
                     st.rerun()
 
         # Chat Input Bar
         user_input = st.chat_input("Ask any question across the indexed transcripts...")
-        if not user_input and "_prefill" in st.session_state:
-            user_input = st.session_state.pop("_prefill")
+        if not user_input and "vrag_prefill" in st.session_state:
+            user_input = st.session_state.pop("vrag_prefill")
 
         if user_input:
             api_key = (
@@ -547,18 +557,18 @@ if current_page == "Vector RAG Assistant":
                 st.error("Please provide your Groq API key in the sidebar or in your .env file.")
                 st.stop()
 
-            st.session_state.messages.append({"role": "user", "content": user_input})
+            st.session_state.vrag_messages.append({"role": "user", "content": user_input})
             with st.chat_message("user"):
                 st.markdown(user_input)
 
             with st.chat_message("assistant"):
                 try:
                     with st.spinner("Executing hybrid vector & BM25 retrieval..."):
-                        hits = st.session_state.rag.retrieve(user_input)
-                        context = st.session_state.rag.format_context(hits)
+                        hits = st.session_state.vrag.retrieve(user_input)
+                        context = st.session_state.vrag.format_context(hits)
 
                     with st.spinner("Generating grounded response with Groq LLM..."):
-                        answer = call_llm(st.session_state.messages, context, api_key)
+                        answer = call_llm(st.session_state.vrag_messages, context, api_key)
 
                     st.markdown(answer)
 
@@ -576,7 +586,7 @@ if current_page == "Vector RAG Assistant":
                                     unsafe_allow_html=True,
                                 )
 
-                    st.session_state.messages.append({
+                    st.session_state.vrag_messages.append({
                         "role": "assistant",
                         "content": answer,
                         "sources": hits,
@@ -585,7 +595,7 @@ if current_page == "Vector RAG Assistant":
                 except Exception as exc:
                     error_msg = f"Inference Error ({type(exc).__name__}): {exc}"
                     st.error(error_msg)
-                    st.session_state.messages.append({"role": "assistant", "content": error_msg})
+                    st.session_state.vrag_messages.append({"role": "assistant", "content": error_msg})
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -611,7 +621,7 @@ elif current_page == "SRT Transcripts Explorer":
         m_col1, m_col2, m_col3 = st.columns(3)
         m_col1.metric("Available SRT Files", total_files)
         m_col2.metric("Total Library Storage", f"{total_kb:.1f} KB")
-        m_col3.metric("Indexed in Vector RAG", len(st.session_state.active_sources))
+        m_col3.metric("Indexed in Vector RAG", len(st.session_state.vrag_active_sources))
 
         st.markdown("---")
 
@@ -627,7 +637,7 @@ elif current_page == "SRT Transcripts Explorer":
         selected_path = next(f for f in available_srts if f.name == selected_file_name)
         cues = parse_srt(selected_path)
         source_stem = selected_path.stem
-        is_already_ingested = source_stem in st.session_state.active_sources
+        is_already_ingested = source_stem in st.session_state.vrag_active_sources
 
         # Action Bar for the selected file
         col_act1, col_act2, col_act3 = st.columns([2, 1, 1])

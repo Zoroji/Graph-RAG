@@ -230,7 +230,27 @@ def chunk_segments(
 class VectorStore:
     def __init__(self, persist_dir: str = "./chroma_db", collection_name: str = "podcast_rag"):
         import chromadb
-        self.client          = chromadb.PersistentClient(path=persist_dir)
+        import shutil
+
+        persist_path = Path(persist_dir)
+        persist_path.mkdir(parents=True, exist_ok=True)
+
+        try:
+            self.client = chromadb.PersistentClient(path=str(persist_path))
+            self.client.get_or_create_collection(collection_name)
+        except Exception as e:
+            print(f"⚠️ ChromaDB initialization error ({e}). Resetting store at {persist_path}...")
+            try:
+                shutil.rmtree(persist_path, ignore_errors=True)
+                persist_path.mkdir(parents=True, exist_ok=True)
+                self.client = chromadb.PersistentClient(path=str(persist_path))
+                self.client.get_or_create_collection(collection_name)
+                print("✅ Fresh ChromaDB client initialized.")
+            except Exception as e2:
+                print(f"⚠️ Falling back to EphemeralClient: {e2}")
+                self.client = chromadb.EphemeralClient()
+                self.client.get_or_create_collection(collection_name)
+
         self.collection_name = collection_name
         self._embedder       = None
 
@@ -433,7 +453,7 @@ class PodcastRAG:
         top_n_rerank: int = _DEFAULT_TOP_N
     ):
         self.persist_dir    = Path(persist_dir)
-        self.persist_dir.mkdir(exist_ok=True)
+        self.persist_dir.mkdir(parents=True, exist_ok=True)
 
         self.chunk_size     = chunk_size
         self.overlap        = overlap
@@ -603,7 +623,7 @@ class PodcastRAG:
 def generate_answer(
     rag: PodcastRAG,
     query: str,
-    model: str = "openai/gpt-oss-20b"
+    model: str = "llama-3.3-70b-versatile"
 ) -> str:
     """Retrieve podcast excerpts and generate an answer using Groq."""
     from groq import Groq

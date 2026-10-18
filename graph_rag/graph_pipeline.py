@@ -163,7 +163,27 @@ def chunk_segments(segments: list, chunk_size=500, overlap=80, source_name="podc
 class VectorStore:
     def __init__(self, persist_dir: str = "./chroma_db", collection_name: str = "graphrag"):
         import chromadb
-        self.client          = chromadb.PersistentClient(path=persist_dir)
+        import shutil
+
+        persist_path = Path(persist_dir)
+        persist_path.mkdir(parents=True, exist_ok=True)
+
+        try:
+            self.client = chromadb.PersistentClient(path=str(persist_path))
+            self.client.get_or_create_collection(collection_name)
+        except Exception as e:
+            print(f"⚠️ ChromaDB initialization error ({e}). Resetting store at {persist_path}...")
+            try:
+                shutil.rmtree(persist_path, ignore_errors=True)
+                persist_path.mkdir(parents=True, exist_ok=True)
+                self.client = chromadb.PersistentClient(path=str(persist_path))
+                self.client.get_or_create_collection(collection_name)
+                print("✅ Fresh ChromaDB client initialized.")
+            except Exception as e2:
+                print(f"⚠️ Falling back to EphemeralClient: {e2}")
+                self.client = chromadb.EphemeralClient()
+                self.client.get_or_create_collection(collection_name)
+
         self.collection_name = collection_name
         self._embedder       = None
 
@@ -329,7 +349,7 @@ class GraphRAG:
         import networkx as nx
 
         self.persist_dir    = Path(persist_dir)
-        self.persist_dir.mkdir(exist_ok=True)
+        self.persist_dir.mkdir(parents=True, exist_ok=True)
 
         self.chunk_size     = chunk_size
         self.overlap        = overlap
@@ -490,8 +510,8 @@ class GraphRAG:
     
     def _detect_communities(self):
         """
-        Run greedy modularity community detection on EVERY connected component.
-        Singleton nodes each form their own community.
+       community where entities talk to each other a lot, 
+       but have fewer connections to outside entities.
         """
         import networkx as nx
         from networkx.algorithms.community import greedy_modularity_communities

@@ -20,15 +20,25 @@ ASSETS_DIR = BASE_DIR / "assets"
 TRANSCRIPTS_DIR = BASE_DIR / "transcripts"
 TRANSCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
 GRAPH_STORE_DIR = BASE_DIR / "graph_store"
-GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
+try:
+    if hasattr(st, "secrets"):
+        for k, v in st.secrets.items():
+            if isinstance(v, str) and k not in os.environ:
+                os.environ[k] = v
+except Exception:
+    pass
 
-# ─── Page Config ──────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="GraphRAG - Knowledge Graph Intelligence",
-    page_icon=":material/hub:",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+
+try:
+    st.set_page_config(
+        page_title="GraphRAG - Knowledge Graph Intelligence",
+        page_icon=":material/hub:",
+        layout="wide",
+        initial_sidebar_state="expanded",
+    )
+except Exception:
+    pass
 
 # ─── CSS Design System (Graph RAG Theme: Emerald, Teal & Cyan) ────────────────
 st.markdown("""
@@ -235,11 +245,11 @@ st.markdown("""
 # ─── Session State Initialization ─────────────────────────────────────────────
 def init_state():
     defaults = {
-        "messages": [],
-        "rag": None,
-        "ingested": False,
-        "ingest_stats_list": [],
-        "active_sources": [],
+        "grag_messages": [],
+        "grag": None,
+        "grag_ingested": False,
+        "grag_stats_list": [],
+        "grag_active_sources": [],
         "query_mode": "hybrid",
         "api_key": os.getenv("groq_api_key", "") or os.getenv("GROQ_API_KEY", ""),
     }
@@ -253,7 +263,7 @@ init_state()
 
 def restore_saved_graph():
     """Restore saved GraphRAG state if available on disk."""
-    if st.session_state.rag is not None:
+    if st.session_state.grag is not None:
         return
 
     state_file = GRAPH_STORE_DIR / "graph_state.pkl"
@@ -265,10 +275,10 @@ def restore_saved_graph():
 
         rag = GraphRAG(persist_dir=str(GRAPH_STORE_DIR))
         if rag.load_state():
-            st.session_state.rag = rag
-            st.session_state.ingested = bool(rag._ingested_sources)
-            st.session_state.active_sources = list(rag._ingested_sources.keys())
-            st.session_state.ingest_stats_list = list(rag._ingested_sources.values())
+            st.session_state.grag = rag
+            st.session_state.grag_ingested = bool(rag._ingested_sources)
+            st.session_state.grag_active_sources = list(rag._ingested_sources.keys())
+            st.session_state.grag_stats_list = list(rag._ingested_sources.values())
     except Exception as exc:
         st.warning(f"Could not restore saved GraphRAG state: {exc}")
 
@@ -357,7 +367,7 @@ def call_llm(messages: list, context: str, mode: str, api_key: str) -> str:
     """Generate a grounded answer using Groq."""
     from groq import Groq
 
-    active_sources = st.session_state.get("active_sources", [])
+    active_sources = st.session_state.get("grag_active_sources", [])
     source_list = ", ".join(active_sources) if active_sources else "unknown"
 
     mode_instruction = {
@@ -403,9 +413,9 @@ RETRIEVED CONTEXT:
 # ─── Ingestion Helper ─────────────────────────────────────────────────────────
 def run_graph_ingest(file_path: Path, chunk_size: int, overlap: int, top_k: int, top_n: int, gen_summaries: bool):
     """Ingest a transcript into GraphRAG."""
-    if st.session_state.rag is None:
+    if st.session_state.grag is None:
         from graph_pipeline import GraphRAG
-        st.session_state.rag = GraphRAG(
+        st.session_state.grag = GraphRAG(
             persist_dir=str(GRAPH_STORE_DIR),
             chunk_size=chunk_size,
             overlap=overlap,
@@ -417,10 +427,10 @@ def run_graph_ingest(file_path: Path, chunk_size: int, overlap: int, top_k: int,
     if gen_summaries and st.session_state.api_key:
         llm_fn = make_llm_fn(st.session_state.api_key)
 
-    stats = st.session_state.rag.ingest(str(file_path), llm_fn=llm_fn)
-    st.session_state.ingest_stats_list.append(stats)
-    st.session_state.ingested = bool(st.session_state.rag._ingested_sources)
-    st.session_state.active_sources = list(st.session_state.rag._ingested_sources.keys())
+    stats = st.session_state.grag.ingest(str(file_path), llm_fn=llm_fn)
+    st.session_state.grag_stats_list.append(stats)
+    st.session_state.grag_ingested = bool(st.session_state.grag._ingested_sources)
+    st.session_state.grag_active_sources = list(st.session_state.grag._ingested_sources.keys())
     return stats
 
 
@@ -474,7 +484,7 @@ with st.sidebar:
     )
 
     if uploaded_files:
-        already = set(st.session_state.active_sources or [])
+        already = set(st.session_state.grag_active_sources or [])
         pending = [f for f in uploaded_files if Path(f.name).stem not in already]
         btn_label = f"Process {len(pending)} Transcript(s)" if pending else "All Uploads Loaded"
 
@@ -497,8 +507,8 @@ with st.sidebar:
             st.rerun()
 
     # Community summaries trigger
-    if st.session_state.ingested and st.session_state.rag is not None:
-        rag = st.session_state.rag
+    if st.session_state.grag_ingested and st.session_state.grag is not None:
+        rag = st.session_state.grag
         if not rag.has_summaries():
             st.divider()
             st.warning("No community summaries detected. Global mode will fall back to local retrieval.")
@@ -512,16 +522,16 @@ with st.sidebar:
                     st.success("Community summaries generated successfully.")
                     st.rerun()
 
-    if st.session_state.active_sources:
+    if st.session_state.grag_active_sources:
         st.divider()
         st.markdown("### Active Graph Sources")
-        for src in st.session_state.active_sources:
+        for src in st.session_state.grag_active_sources:
             st.markdown(f'<span class="entity-tag">{src}</span>', unsafe_allow_html=True)
 
-    if st.session_state.ingested and st.session_state.rag:
+    if st.session_state.grag_ingested and st.session_state.grag:
         st.divider()
         st.markdown("### Graph Metrics")
-        gs = st.session_state.rag.get_graph_stats()
+        gs = st.session_state.grag.get_graph_stats()
         cols = st.columns(2)
         cols[0].markdown(
             f'<div class="stat-box"><div class="stat-number">{gs["nodes"]}</div>'
@@ -549,7 +559,7 @@ with st.sidebar:
     st.divider()
     col_btn_a, col_btn_b = st.columns(2)
     if col_btn_a.button("Clear Chat", use_container_width=True):
-        st.session_state.messages = []
+        st.session_state.grag_messages = []
         st.rerun()
     if col_btn_b.button("Reset Graph", use_container_width=True):
         if GRAPH_STORE_DIR.exists():
@@ -594,7 +604,7 @@ if current_page == "GraphRAG Assistant":
            - **Hybrid Mode**: Combines entity neighborhood excerpts with high-level community themes.
         """)
 
-    if not st.session_state.ingested:
+    if not st.session_state.grag_ingested:
         st.markdown("---")
         st.info("No transcripts currently loaded in the knowledge graph. You can index available transcripts below or upload in the sidebar.")
 
@@ -622,8 +632,8 @@ if current_page == "GraphRAG Assistant":
         c4.markdown("**4. Multi-Hop Chat**\n\nAsk questions using Local, Global, or Hybrid retrieval modes.")
 
     else:
-        rag = st.session_state.rag
-        sources = st.session_state.active_sources
+        rag = st.session_state.grag
+        sources = st.session_state.grag_active_sources
         src_str = " · ".join(f"`{s}`" for s in sources)
         st.markdown(f"**Indexed Sources ({len(sources)}):** {src_str}")
 
@@ -642,7 +652,7 @@ if current_page == "GraphRAG Assistant":
         st.markdown("---")
 
         # Chat History
-        for msg in st.session_state.messages:
+        for msg in st.session_state.grag_messages:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
 
@@ -675,7 +685,7 @@ if current_page == "GraphRAG Assistant":
                                 )
 
         # Suggested Queries
-        if not st.session_state.messages:
+        if not st.session_state.grag_messages:
             st.markdown("**Suggested Queries:**")
             suggestions = [
                 "What are the central themes across all transcripts?",
@@ -686,20 +696,20 @@ if current_page == "GraphRAG Assistant":
             cols = st.columns(2)
             for i, sug in enumerate(suggestions):
                 if cols[i % 2].button(sug, key=f"sug_{i}", use_container_width=True):
-                    st.session_state["_prefill"] = sug
+                    st.session_state["grag_prefill"] = sug
                     st.rerun()
 
         # Chat Input
         user_input = st.chat_input("Ask anything across the knowledge graph...")
-        if not user_input and "_prefill" in st.session_state:
-            user_input = st.session_state.pop("_prefill")
+        if not user_input and "grag_prefill" in st.session_state:
+            user_input = st.session_state.pop("grag_prefill")
 
         if user_input:
             if not st.session_state.api_key:
                 st.error("Please enter your Groq API key in the sidebar.")
                 st.stop()
 
-            st.session_state.messages.append({"role": "user", "content": user_input})
+            st.session_state.grag_messages.append({"role": "user", "content": user_input})
             with st.chat_message("user"):
                 st.markdown(user_input)
 
@@ -717,7 +727,7 @@ if current_page == "GraphRAG Assistant":
 
                         with st.spinner("Synthesizing response with Groq LLM..."):
                             answer = call_llm(
-                                st.session_state.messages,
+                                st.session_state.grag_messages,
                                 context,
                                 actual_mode,
                                 st.session_state.api_key,
@@ -751,7 +761,7 @@ if current_page == "GraphRAG Assistant":
                                         unsafe_allow_html=True,
                                     )
 
-                        st.session_state.messages.append({
+                        st.session_state.grag_messages.append({
                             "role": "assistant",
                             "content": answer,
                             "mode": actual_mode,
@@ -763,7 +773,7 @@ if current_page == "GraphRAG Assistant":
                     except Exception as exc:
                         error_msg = f"Graph Query Error: {exc}"
                         st.error(error_msg)
-                        st.session_state.messages.append({"role": "assistant", "content": error_msg})
+                        st.session_state.grag_messages.append({"role": "assistant", "content": error_msg})
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -776,10 +786,10 @@ elif current_page == "Knowledge Graph Explorer":
         unsafe_allow_html=True,
     )
 
-    if not st.session_state.ingested or st.session_state.rag is None:
+    if not st.session_state.grag_ingested or st.session_state.grag is None:
         st.info("No knowledge graph constructed yet. Ingest transcripts using the assistant or the SRT explorer.")
     else:
-        rag = st.session_state.rag
+        rag = st.session_state.grag
         gs = rag.get_graph_stats()
 
         c1, c2, c3, c4 = st.columns(4)
@@ -843,7 +853,7 @@ elif current_page == "SRT Transcripts Explorer":
         m_col1, m_col2, m_col3 = st.columns(3)
         m_col1.metric("Available SRT Files", total_files)
         m_col2.metric("Total Library Storage", f"{total_kb:.1f} KB")
-        m_col3.metric("Indexed in GraphRAG", len(st.session_state.active_sources))
+        m_col3.metric("Indexed in GraphRAG", len(st.session_state.grag_active_sources))
 
         st.markdown("---")
 
@@ -858,7 +868,7 @@ elif current_page == "SRT Transcripts Explorer":
         selected_path = next(f for f in available_srts if f.name == selected_file_name)
         cues = parse_srt(selected_path)
         source_stem = selected_path.stem
-        is_already_ingested = source_stem in (st.session_state.active_sources or [])
+        is_already_ingested = source_stem in (st.session_state.grag_active_sources or [])
 
         # Action Bar
         col_act1, col_act2, col_act3 = st.columns([2, 1, 1])
