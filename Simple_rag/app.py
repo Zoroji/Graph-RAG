@@ -212,8 +212,9 @@ def init_state():
         "vrag_ingested": False,
         "vrag_stats_list": [],
         "vrag_active_sources": [],
-        "groq_api_key_input": os.getenv("groq_api_key", "") or os.getenv("GROQ_API_KEY", ""),
-        "persist_dir": str(Path(tempfile.gettempdir()) / f"rag_store_{uuid.uuid4().hex}"),
+        "vrag_custom_api_key": "",
+        "vrag_data_mode": "library",
+        "persist_dir": str(BASE_DIR / "rag_store"),
         "srt_current_file": None,
         "srt_page_num": 1,
     }
@@ -273,9 +274,25 @@ def parse_srt(file_path: Path):
     return cues
 
 
-# ─── LLM Caller ───────────────────────────────────────────────────────────────
+# ─── Secure API Key Getter & LLM Caller ────────────────────────────────────────
+def get_vrag_api_key() -> str:
+    """Safely obtain the Groq API key without exposing it on the frontend."""
+    override = st.session_state.get("vrag_custom_api_key", "").strip()
+    if override:
+        return override
+    env_k = os.getenv("groq_api_key", "").strip() or os.getenv("GROQ_API_KEY", "").strip()
+    if env_k:
+        return env_k
+    if hasattr(st, "secrets"):
+        if "groq_api_key" in st.secrets:
+            return str(st.secrets["groq_api_key"]).strip()
+        if "GROQ_API_KEY" in st.secrets:
+            return str(st.secrets["GROQ_API_KEY"]).strip()
+    return ""
+
+
 def call_llm(messages: list, context: str, api_key: str) -> str:
-    """Generate an answer using Groq."""
+    """Generate an answer using Groq with automatic model fallback."""
     from groq import Groq
 
     active_sources = st.session_state.get("vrag_active_sources", [])
@@ -312,22 +329,44 @@ TRANSCRIPT EXCERPTS:
     ]
 
     client = Groq(api_key=api_key.strip())
-    response = client.chat.completions.create(
-        model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
-        messages=[{"role": "system", "content": system_prompt}] + conversation,
-        max_tokens=1024,
-        temperature=0.3,
-    )
-    return response.choices[0].message.content or ""
+    preferred_model = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
+    candidate_models = [
+        preferred_model,
+        "openai/gpt-oss-20b",
+        "openai/gpt-oss-120b",
+        "qwen/qwen3.8-27b",
+    ]
+    seen = set()
+    unique_candidates = [m for m in candidate_models if not (m in seen or seen.add(m))]
+
+    last_exc = None
+    for m_idx, m_name in enumerate(unique_candidates):
+        try:
+            response = client.chat.completions.create(
+                model=m_name,
+                messages=[{"role": "system", "content": system_prompt}] + conversation,
+                max_tokens=1024,
+                temperature=0.3,
+            )
+            return response.choices[0].message.content or ""
+        except Exception as exc:
+            last_exc = exc
+            err_msg = str(exc).lower()
+            if ("model_not_found" in err_msg or "does not exist" in err_msg or "404" in err_msg) and m_idx < len(unique_candidates) - 1:
+                continue
+            raise exc
+
+    raise last_exc or RuntimeError("All candidate models failed.")
 
 
 # ─── Ingestion Helper ─────────────────────────────────────────────────────────
-def run_ingest(file_path: Path, chunk_size: int, overlap: int, top_k: int, top_n: int):
+def run_ingest(file_path: Path, chunk_size: int, overlap: int, top_k: int, top_n: int, persist_dir: Optional[str] = None):
     """Ingest a single transcript file into the PodcastRAG vector index."""
+    target_dir = persist_dir or st.session_state.persist_dir
     if st.session_state.vrag is None:
         from rag_pipeline import PodcastRAG
         st.session_state.vrag = PodcastRAG(
-            persist_dir=st.session_state.persist_dir,
+            persist_dir=target_dir,
             chunk_size=chunk_size,
             overlap=overlap,
             top_k_retrieve=top_k,
@@ -357,15 +396,59 @@ with st.sidebar:
     st.divider()
     st.markdown("### Configuration")
     st.caption("LLM Provider: Groq API")
-    api_key_input = st.text_input(
-        "Groq API Key",
-        value=st.session_state.groq_api_key_input,
-        type="password",
-        placeholder="Loaded from .env or enter key...",
-        help="Uses groq_api_key from .env by default.",
+
+    env_has_key = bool(
+        os.getenv("groq_api_key", "").strip()
+        or os.getenv("GROQ_API_KEY", "").strip()
+        or (hasattr(st, "secrets") and ("groq_api_key" in st.secrets or "GROQ_API_KEY" in st.secrets))
     )
-    if api_key_input:
-        st.session_state.groq_api_key_input = api_key_input
+
+    if env_has_key:
+        st.success("🔒 System Groq API Key Active")
+        custom_key = st.text_input(
+            "Override API Key (Optional)",
+            value="",
+            type="password",
+            placeholder="Leave blank to use system key",
+            help="Your key is secure and never shown on screen.",
+        )
+        if custom_key.strip():
+            st.session_state.vrag_custom_api_key = custom_key.strip()
+    else:
+        st.info("💡 Enter your Groq API key:")
+        custom_key = st.text_input(
+            "Groq API Key",
+            value="",
+            type="password",
+            placeholder="gsk_...",
+            help="Held in session memory only; never saved to disk.",
+        )
+        if custom_key.strip():
+            st.session_state.vrag_custom_api_key = custom_key.strip()
+
+    st.divider()
+    st.markdown("### Data Source")
+    source_choice = st.radio(
+        "Select Pipeline Source",
+        ["🎙️ Pre-loaded Tech Podcast Library", "📂 Custom SRT File (Private Session)"],
+        index=0 if st.session_state.get("vrag_data_mode") != "custom" else 1,
+        help="Query the 4 pre-stored podcast episodes or analyze your own custom transcript privately."
+    )
+    is_custom = "Custom" in source_choice
+    prev_mode = st.session_state.get("vrag_data_mode", "library")
+    new_mode = "custom" if is_custom else "library"
+    if new_mode != prev_mode:
+        st.session_state.vrag_data_mode = new_mode
+        st.session_state.vrag_messages = []
+        st.session_state.vrag = None
+        st.session_state.vrag_ingested = False
+        st.session_state.vrag_stats_list = []
+        st.session_state.vrag_active_sources = []
+        if is_custom:
+            st.session_state.persist_dir = str(Path(tempfile.gettempdir()) / f"custom_vrag_{uuid.uuid4().hex}")
+        else:
+            st.session_state.persist_dir = str(BASE_DIR / "rag_store")
+        st.rerun()
 
     st.divider()
     with st.expander("Vector RAG Hyperparameters", expanded=False):
@@ -374,36 +457,37 @@ with st.sidebar:
         top_k = st.slider("Vector Retrieve Top-K", 5, 30, 20, 5)
         top_n = st.slider("Cross-Encoder Rerank Top-N", 2, 10, 5, 1)
 
-    st.divider()
-    st.markdown("### Upload New Transcripts")
-    uploaded_files = st.file_uploader(
-        "Upload .srt / .txt files",
-        type=["srt", "txt"],
-        accept_multiple_files=True,
-        help="Upload podcast transcript files to index into ChromaDB.",
-    )
-
-    if uploaded_files:
-        already = set(st.session_state.vrag_active_sources)
-        pending = [f for f in uploaded_files if Path(f.name).stem not in already]
-        btn_label = f"Process {len(pending)} New Transcript(s)" if pending else "All Uploads Loaded"
-
-        if st.button(btn_label, use_container_width=True, type="primary", disabled=not pending):
-            progress_bar = st.progress(0.0, text="Initializing ingestion...")
-            new_stats = []
-            for i, uf in enumerate(pending):
-                progress_bar.progress((i + 0.5) / len(pending), text=f"Processing {uf.name}")
-                saved_path = TRANSCRIPTS_DIR / Path(uf.name).name
-                saved_path.write_bytes(uf.getvalue())
-                try:
-                    stats = run_ingest(saved_path, chunk_size, overlap, top_k, top_n)
-                    new_stats.append(stats)
-                except Exception as exc:
-                    st.error(f"Error processing {uf.name}: {exc}")
-
-            progress_bar.progress(1.0, text="Ingestion complete")
-            st.success(f"{len(new_stats)} transcript(s) added to vector index")
-            st.rerun()
+    if is_custom:
+        st.divider()
+        st.markdown("### Upload Custom Transcript")
+        st.caption("🔒 **Privacy Guarantee**: Your custom transcript is analyzed purely in temporary session memory and is **never** saved to disk or git.")
+        uploaded_file = st.file_uploader(
+            "Upload .srt / .txt file",
+            type=["srt", "txt"],
+            accept_multiple_files=False,
+            key="custom_vrag_uploader"
+        )
+        if uploaded_file:
+            if st.button(f"Analyze {uploaded_file.name} (Private)", use_container_width=True, type="primary"):
+                with st.spinner(f"Indexing custom transcript {uploaded_file.name}..."):
+                    temp_dir = Path(tempfile.gettempdir()) / f"vrag_{uuid.uuid4().hex}"
+                    temp_dir.mkdir(parents=True, exist_ok=True)
+                    temp_file = temp_dir / Path(uploaded_file.name).name
+                    temp_file.write_bytes(uploaded_file.getvalue())
+                    try:
+                        from rag_pipeline import PodcastRAG
+                        st.session_state.vrag = PodcastRAG(
+                            persist_dir=str(temp_dir),
+                            chunk_size=chunk_size,
+                            overlap=overlap,
+                            top_k_retrieve=top_k,
+                            top_n_rerank=top_n,
+                        )
+                        run_ingest(temp_file, chunk_size, overlap, top_k, top_n, persist_dir=str(temp_dir))
+                        st.success(f"Custom transcript {uploaded_file.name} ready for private analysis!")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Error processing {uploaded_file.name}: {exc}")
 
     if st.session_state.vrag_active_sources:
         st.divider()
@@ -477,23 +561,39 @@ if current_page == "Vector RAG Assistant":
     # When no documents are ingested yet
     if not st.session_state.vrag_ingested:
         st.markdown("---")
-        st.info("No transcripts currently loaded in the vector index. You can load available SRT transcripts below or upload in the sidebar.")
+        is_custom = st.session_state.get("vrag_data_mode") == "custom"
+        if is_custom:
+            st.info("📂 **Private Custom Transcript Mode**: Please upload an `.srt` or `.txt` file in the sidebar to index your private transcript.")
+            st.caption("🔒 All processing occurs in temporary session memory and is never saved to the server or Git.")
+        else:
+            st.info("No library transcripts currently loaded in the vector index. You can index all 4 available podcast episodes at once below:")
 
-        available_srts = get_available_srt_files()
-        if available_srts:
-            st.markdown("#### Available Local Transcripts")
-            st.caption("Click to index directly into the Vector RAG pipeline:")
-            cols = st.columns(min(len(available_srts), 3))
-            for idx, srt_file in enumerate(available_srts):
-                col = cols[idx % len(cols)]
-                with col:
-                    st.markdown(f"**{srt_file.stem}**")
-                    st.caption(f"File size: {srt_file.stat().st_size / 1024:.1f} KB")
-                    if st.button(f"Index {srt_file.stem}", key=f"quick_index_{idx}", use_container_width=True):
-                        with st.spinner(f"Indexing {srt_file.name}..."):
-                            run_ingest(srt_file, chunk_size, overlap, top_k, top_n)
-                        st.success(f"Indexed {srt_file.name}")
-                        st.rerun()
+            available_srts = get_available_srt_files()
+            if available_srts:
+                st.markdown("#### Pre-loaded Tech Podcast Library")
+                st.caption("The 4 tech podcast episodes below are stored locally in the system. Click to index them into ChromaDB:")
+
+                if st.button(f"🚀 Index All {len(available_srts)} Library Transcripts (Elon, Sam, Jeff, Jensen)", type="primary", use_container_width=True):
+                    prog = st.progress(0.0, text="Initializing library indexing...")
+                    for i, srt_f in enumerate(available_srts):
+                        prog.progress((i) / len(available_srts), text=f"Indexing {srt_f.name} ({i+1}/{len(available_srts)})...")
+                        run_ingest(srt_f, chunk_size, overlap, top_k, top_n)
+                    prog.progress(1.0, text="Vector index built for all library episodes!")
+                    st.success("All library episodes indexed into Vector RAG!")
+                    st.rerun()
+
+                st.write("")
+                cols = st.columns(min(len(available_srts), 4))
+                for idx, srt_file in enumerate(available_srts):
+                    col = cols[idx % len(cols)]
+                    with col:
+                        st.markdown(f"**{srt_file.stem}**")
+                        st.caption(f"File size: {srt_file.stat().st_size / 1024:.1f} KB")
+                        if st.button(f"Index {srt_file.stem}", key=f"quick_index_{idx}", use_container_width=True):
+                            with st.spinner(f"Indexing {srt_file.name}..."):
+                                run_ingest(srt_file, chunk_size, overlap, top_k, top_n)
+                            st.success(f"Indexed {srt_file.name}")
+                            st.rerun()
 
         st.markdown("---")
         c1, c2, c3 = st.columns(3)
@@ -546,15 +646,9 @@ if current_page == "Vector RAG Assistant":
             user_input = st.session_state.pop("vrag_prefill")
 
         if user_input:
-            api_key = (
-                st.session_state.get("groq_api_key_input")
-                or os.getenv("groq_api_key")
-                or os.getenv("GROQ_API_KEY")
-                or ""
-            ).strip()
-
+            api_key = get_vrag_api_key()
             if not api_key:
-                st.error("Please provide your Groq API key in the sidebar or in your .env file.")
+                st.error("Please provide your Groq API key in the sidebar or configure it in .env / Streamlit secrets.")
                 st.stop()
 
             st.session_state.vrag_messages.append({"role": "user", "content": user_input})

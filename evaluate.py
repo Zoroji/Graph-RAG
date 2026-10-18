@@ -45,10 +45,9 @@ for folder in ["graph_rag", "GraphRAG"]:
 from dotenv import load_dotenv
 load_dotenv(ROOT / ".env", override=False)
 
-# Support lowercase groq_api_key and uppercase GROQ_API_KEY
 DEFAULT_GROQ_KEY = os.getenv("groq_api_key", "") or os.getenv("GROQ_API_KEY", "")
 DEFAULT_OPENAI_KEY = os.getenv("OPENAI_API_KEY", "")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 
 EVAL_STORE = ROOT / "eval_store"
 
@@ -207,12 +206,22 @@ def call_llm(prompt: str, provider: str, api_key: str, max_tokens: int = 400) ->
             if provider == "groq":
                 from groq import Groq
                 client = Groq(api_key=api_key.strip())
-                resp = client.chat.completions.create(
-                    model=GROQ_MODEL,
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=max_tokens,
-                    temperature=0.1,
-                )
+                candidate_models = [GROQ_MODEL, "openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.8-27b"]
+                resp = None
+                for m_idx, m_name in enumerate(candidate_models):
+                    try:
+                        resp = client.chat.completions.create(
+                            model=m_name,
+                            messages=[{"role": "user", "content": prompt}],
+                            max_tokens=max_tokens,
+                            temperature=0.1,
+                        )
+                        break
+                    except Exception as m_exc:
+                        m_err = str(m_exc).lower()
+                        if ("model_not_found" in m_err or "does not exist" in m_err or "404" in m_err) and m_idx < len(candidate_models) - 1:
+                            continue
+                        raise m_exc
             else:
                 from openai import OpenAI
                 client = OpenAI(api_key=api_key.strip())

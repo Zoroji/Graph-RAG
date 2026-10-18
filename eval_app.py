@@ -153,12 +153,29 @@ with st.sidebar:
     provider = st.selectbox("LLM Provider", ["groq", "openai"], index=default_provider_idx)
 
     env_key = DEFAULT_GROQ_KEY if provider == "groq" else DEFAULT_OPENAI_KEY
-    api_key = st.text_input(
-        "API Key",
-        value=env_key,
-        type="password",
-        placeholder="Loaded from .env" if env_key else "Enter API key...",
-    )
+    if not env_key and hasattr(st, "secrets"):
+        if provider == "groq":
+            env_key = str(st.secrets.get("groq_api_key", "") or st.secrets.get("GROQ_API_KEY", "")).strip()
+        else:
+            env_key = str(st.secrets.get("OPENAI_API_KEY", "")).strip()
+
+    if env_key:
+        st.success(f"🔒 System {provider.upper()} API Key Active")
+        api_key = st.text_input(
+            f"Override {provider.upper()} Key (Optional)",
+            value="",
+            type="password",
+            placeholder="Leave blank to use system key",
+            help="Your key is protected and never shown on screen.",
+        )
+    else:
+        st.info(f"Enter your {provider.upper()} API key:")
+        api_key = st.text_input(
+            f"{provider.upper()} API Key",
+            value="",
+            type="password",
+            placeholder=f"Enter {provider} key...",
+        )
 
     st.divider()
     force_rerun = st.checkbox("Force re-run (clears previous cache)", value=False)
