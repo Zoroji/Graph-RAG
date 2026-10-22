@@ -541,14 +541,15 @@ class PodcastRAG:
         return reranked
 
     def format_context(self, hits: List[Tuple[str, dict, float]]) -> str:
-        """Format retrieved chunks into LLM context string."""
+        """Format retrieved chunks into concise LLM context string (optimized for TPM limits)."""
         if not hits:
             return "No relevant excerpts found."
         parts = []
-        for i, (text, meta, score) in enumerate(hits, 1):
+        for i, (text, meta, score) in enumerate(hits[:3], 1):
             source    = meta.get("source", "unknown")
             timestamp = f"{meta.get('start_time', '?')} → {meta.get('end_time', '?')}"
-            parts.append(f"[Excerpt {i} | Source: {source} | Timestamp: {timestamp}]\n{text}")
+            clean_text = text[:400].strip() + ("..." if len(text) > 400 else "")
+            parts.append(f"[Excerpt {i} | Source: {source} | Timestamp: {timestamp}]\n{clean_text}")
         return "\n\n---\n\n".join(parts)
 
     # ── State Persistence (survive page refresh) ───────────────────────────────
@@ -668,7 +669,17 @@ def generate_answer(
             return response.choices[0].message.content or ""
         except Exception as exc:
             err_msg = str(exc).lower()
-            if ("model_not_found" in err_msg or "does not exist" in err_msg or "404" in err_msg) and m_idx < len(unique_candidates) - 1:
+            is_recoverable = (
+                "model_not_found" in err_msg
+                or "does not exist" in err_msg
+                or "404" in err_msg
+                or "rate_limit" in err_msg
+                or "429" in err_msg
+                or "tokens per minute" in err_msg
+                or "tpm" in err_msg
+                or "too many requests" in err_msg
+            )
+            if is_recoverable and m_idx < len(unique_candidates) - 1:
                 continue
             raise exc
 

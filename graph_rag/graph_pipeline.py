@@ -772,23 +772,24 @@ class GraphRAG:
 
 
     def format_context(self, result: dict) -> str:
-        """Format query result into LLM context string."""
+        """Format query result into concise LLM context string (optimized to prevent TPM rate limits)."""
         parts: List[str] = []
         summaries = result.get("summaries", [])
 
         if summaries:
             header = "## Relevant Topic/Theme Summaries (Knowledge Graph Communities)\n"
-            header += "\n\n".join(f"• {s}" for s in summaries)
+            header += "\n\n".join(f"• {s[:300].strip()}..." if len(s) > 300 else f"• {s.strip()}" for s in summaries[:2])
             parts.append(header)
 
         hits = result.get("hits", [])
         if not hits:
             parts.append("No specific excerpts retrieved.")
         else:
-            for i, (text, meta, score) in enumerate(hits, 1):
+            for i, (text, meta, score) in enumerate(hits[:3], 1):
                 source    = meta.get("source", "unknown")
                 timestamp = f"{meta.get('start_time', '?')} → {meta.get('end_time', '?')}"
-                parts.append(f"[Excerpt {i} | Source: {source} | Timestamp: {timestamp}]\n{text}")
+                clean_text = text[:400].strip() + ("..." if len(text) > 400 else "")
+                parts.append(f"[Excerpt {i} | Source: {source} | Timestamp: {timestamp}]\n{clean_text}")
 
         return "\n\n---\n\n".join(parts) if parts else "No relevant content found."
 

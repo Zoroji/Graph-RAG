@@ -8,10 +8,13 @@ Run: streamlit run app.py
 import os
 import re
 import math
+import time
+import uuid
 import shutil
 import tempfile
 import streamlit as st
 from pathlib import Path
+from typing import Optional
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -352,14 +355,31 @@ def get_grag_api_key() -> str:
     return ""
 
 
-def call_groq_completion(client, messages: list, max_tokens: int = 1024, temperature: float = 0.3) -> str:
-    """Call Groq chat completion with automatic model fallback if 404 occurs."""
-    candidate_models = [
-        GROQ_MODEL,
-        "openai/gpt-oss-20b",
-        "openai/gpt-oss-120b",
-        "qwen/qwen3.8-27b",
-    ]
+def create_llm_client(api_key: str):
+    """Instantiate appropriate client (OpenRouter or Groq) based on API key prefix."""
+    if api_key.startswith("sk-or-"):
+        from openai import OpenAI
+        return OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key), True
+    from groq import Groq
+    return Groq(api_key=api_key), False
+
+
+def call_groq_completion(client, messages: list, is_openrouter: bool = False, max_tokens: int = 1024, temperature: float = 0.3) -> str:
+    """Call chat completion with automatic model rotation across models if 404 or 429 rate limit occurs."""
+    if is_openrouter:
+        candidate_models = [
+            "meta-llama/llama-3.3-70b-instruct:free",
+            "google/gemini-2.0-flash-exp:free",
+            "deepseek/deepseek-r1:free",
+        ]
+    else:
+        candidate_models = [
+            GROQ_MODEL,
+            "qwen/qwen3.8-27b",
+            "openai/gpt-oss-120b",
+            "openai/gpt-oss-20b",
+        ]
+
     seen = set()
     unique_candidates = [m for m in candidate_models if not (m in seen or seen.add(m))]
 
@@ -376,7 +396,18 @@ def call_groq_completion(client, messages: list, max_tokens: int = 1024, tempera
         except Exception as exc:
             last_exc = exc
             err_msg = str(exc).lower()
-            if ("model_not_found" in err_msg or "does not exist" in err_msg or "404" in err_msg) and m_idx < len(unique_candidates) - 1:
+            is_recoverable = (
+                "model_not_found" in err_msg
+                or "does not exist" in err_msg
+                or "404" in err_msg
+                or "rate_limit" in err_msg
+                or "429" in err_msg
+                or "tokens per minute" in err_msg
+                or "tpm" in err_msg
+                or "too many requests" in err_msg
+            )
+            if is_recoverable and m_idx < len(unique_candidates) - 1:
+                time.sleep(1.0)
                 continue
             raise exc
 
@@ -384,10 +415,8 @@ def call_groq_completion(client, messages: list, max_tokens: int = 1024, tempera
 
 
 def make_llm_fn(api_key: str):
-    """Return a Groq-backed llm_fn(prompt) -> str for community summaries."""
-    from groq import Groq
-
-    client = Groq(api_key=api_key)
+    """Return a model-agnostic llm_fn(prompt) -> str for community summaries."""
+    client, is_openrouter = create_llm_client(api_key)
 
     def llm_fn(prompt: str) -> str:
         messages = [
@@ -401,15 +430,13 @@ def make_llm_fn(api_key: str):
             },
             {"role": "user", "content": prompt},
         ]
-        return call_groq_completion(client, messages, max_tokens=512, temperature=0.2)
+        return call_groq_completion(client, messages, is_openrouter=is_openrouter, max_tokens=512, temperature=0.2)
 
     return llm_fn
 
 
 def call_llm(messages: list, context: str, mode: str, api_key: str) -> str:
-    """Generate a grounded answer using Groq."""
-    from groq import Groq
-
+    """Generate a grounded answer using Groq or OpenRouter with rate-limit recovery."""
     active_sources = st.session_state.get("grag_active_sources", [])
     source_list = ", ".join(active_sources) if active_sources else "unknown"
 
@@ -443,9 +470,9 @@ RETRIEVED CONTEXT:
     if messages:
         history.append({"role": "user", "content": messages[-1]["content"]})
 
-    client = Groq(api_key=api_key)
+    client, is_openrouter = create_llm_client(api_key)
     chat_messages = [{"role": "system", "content": system_prompt}] + history
-    return call_groq_completion(client, chat_messages, max_tokens=1024, temperature=0.3)
+    return call_groq_completion(client, chat_messages, is_openrouter=is_openrouter, max_tokens=1024, temperature=0.3)
 
 
 # ─── Ingestion Helper ─────────────────────────────────────────────────────────

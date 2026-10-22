@@ -8,10 +8,12 @@ Run: streamlit run app.py
 import os
 import re
 import math
+import time
 import uuid
 import tempfile
 import streamlit as st
 from pathlib import Path
+from typing import Optional
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -328,14 +330,25 @@ TRANSCRIPT EXCERPTS:
         if m.get("role") in {"user", "assistant"} and isinstance(m.get("content"), str)
     ]
 
-    client = Groq(api_key=api_key.strip())
-    preferred_model = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
-    candidate_models = [
-        preferred_model,
-        "openai/gpt-oss-20b",
-        "openai/gpt-oss-120b",
-        "qwen/qwen3.8-27b",
-    ]
+    if api_key.startswith("sk-or-"):
+        from openai import OpenAI
+        client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key.strip())
+        candidate_models = [
+            "meta-llama/llama-3.3-70b-instruct:free",
+            "google/gemini-2.0-flash-exp:free",
+            "deepseek/deepseek-r1:free",
+        ]
+    else:
+        from groq import Groq
+        client = Groq(api_key=api_key.strip())
+        preferred_model = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
+        candidate_models = [
+            preferred_model,
+            "qwen/qwen3.8-27b",
+            "openai/gpt-oss-120b",
+            "openai/gpt-oss-20b",
+        ]
+
     seen = set()
     unique_candidates = [m for m in candidate_models if not (m in seen or seen.add(m))]
 
@@ -352,7 +365,18 @@ TRANSCRIPT EXCERPTS:
         except Exception as exc:
             last_exc = exc
             err_msg = str(exc).lower()
-            if ("model_not_found" in err_msg or "does not exist" in err_msg or "404" in err_msg) and m_idx < len(unique_candidates) - 1:
+            is_recoverable = (
+                "model_not_found" in err_msg
+                or "does not exist" in err_msg
+                or "404" in err_msg
+                or "rate_limit" in err_msg
+                or "429" in err_msg
+                or "tokens per minute" in err_msg
+                or "tpm" in err_msg
+                or "too many requests" in err_msg
+            )
+            if is_recoverable and m_idx < len(unique_candidates) - 1:
+                time.sleep(1.0)
                 continue
             raise exc
 
