@@ -46,8 +46,15 @@ for folder in ["graph_rag", "GraphRAG"]:
 
 load_dotenv(ROOT / ".env", override=False)
 
+def _has_secrets_file() -> bool:
+    try:
+        paths = st.config.get_option("secrets.files")
+        return any(os.path.isfile(p) for p in paths)
+    except Exception:
+        return False
+
 try:
-    if hasattr(st, "secrets"):
+    if _has_secrets_file() and hasattr(st, "secrets"):
         for k, v in st.secrets.items():
             if isinstance(v, str) and k not in os.environ:
                 os.environ[k] = v
@@ -170,7 +177,7 @@ with st.sidebar:
     env_key = DEFAULT_GROQ_KEY if provider == "groq" else DEFAULT_OPENAI_KEY
     if not env_key:
         try:
-            if hasattr(st, "secrets"):
+            if _has_secrets_file() and hasattr(st, "secrets"):
                 if provider == "groq":
                     env_key = str(st.secrets.get("groq_api_key", "") or st.secrets.get("GROQ_API_KEY", "")).strip()
                 else:

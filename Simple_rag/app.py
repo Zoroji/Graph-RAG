@@ -32,8 +32,15 @@ try:
 except Exception:
     pass
 
+def _has_secrets_file() -> bool:
+    try:
+        paths = st.config.get_option("secrets.files")
+        return any(os.path.isfile(p) for p in paths)
+    except Exception:
+        return False
+
 try:
-    if hasattr(st, "secrets"):
+    if _has_secrets_file() and hasattr(st, "secrets"):
         for k, v in st.secrets.items():
             if isinstance(v, str) and k not in os.environ:
                 os.environ[k] = v
@@ -286,7 +293,7 @@ def get_vrag_api_key() -> str:
     if env_k:
         return env_k
     try:
-        if hasattr(st, "secrets"):
+        if _has_secrets_file() and hasattr(st, "secrets"):
             if "groq_api_key" in st.secrets:
                 return str(st.secrets["groq_api_key"]).strip()
             if "GROQ_API_KEY" in st.secrets:
@@ -428,7 +435,7 @@ with st.sidebar:
         if os.getenv("groq_api_key", "").strip() or os.getenv("GROQ_API_KEY", "").strip():
             return True
         try:
-            if hasattr(st, "secrets") and ("groq_api_key" in st.secrets or "GROQ_API_KEY" in st.secrets):
+            if _has_secrets_file() and hasattr(st, "secrets") and ("groq_api_key" in st.secrets or "GROQ_API_KEY" in st.secrets):
                 return True
         except Exception:
             pass

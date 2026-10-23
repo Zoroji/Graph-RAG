@@ -31,9 +31,16 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "Simple_rag"))
 sys.path.insert(0, str(ROOT / "graph_rag"))
 
+def _has_secrets_file() -> bool:
+    try:
+        paths = st.config.get_option("secrets.files")
+        return any(os.path.isfile(p) for p in paths)
+    except Exception:
+        return False
+
 # Automatically populate os.environ from st.secrets if deployed on Streamlit Cloud
 try:
-    if hasattr(st, "secrets"):
+    if _has_secrets_file() and hasattr(st, "secrets"):
         for k, v in st.secrets.items():
             if isinstance(v, str) and k not in os.environ:
                 os.environ[k] = v
