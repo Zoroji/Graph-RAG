@@ -23,8 +23,14 @@ except Exception:
     pass
 
 import pandas as pd
-import plotly.graph_objects as go
-import plotly.express as px
+try:
+    import plotly.graph_objects as go
+    import plotly.express as px
+    HAS_PLOTLY = True
+except ImportError:
+    HAS_PLOTLY = False
+    go = None
+    px = None
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -39,6 +45,14 @@ for folder in ["graph_rag", "GraphRAG"]:
         break
 
 load_dotenv(ROOT / ".env", override=False)
+
+try:
+    if hasattr(st, "secrets"):
+        for k, v in st.secrets.items():
+            if isinstance(v, str) and k not in os.environ:
+                os.environ[k] = v
+except Exception:
+    pass
 
 DEFAULT_GROQ_KEY = os.getenv("groq_api_key", "") or os.getenv("GROQ_API_KEY", "")
 DEFAULT_OPENAI_KEY = os.getenv("OPENAI_API_KEY", "")
@@ -154,11 +168,15 @@ with st.sidebar:
     provider = st.selectbox("LLM Provider", ["groq", "openai"], index=default_provider_idx)
 
     env_key = DEFAULT_GROQ_KEY if provider == "groq" else DEFAULT_OPENAI_KEY
-    if not env_key and hasattr(st, "secrets"):
-        if provider == "groq":
-            env_key = str(st.secrets.get("groq_api_key", "") or st.secrets.get("GROQ_API_KEY", "")).strip()
-        else:
-            env_key = str(st.secrets.get("OPENAI_API_KEY", "")).strip()
+    if not env_key:
+        try:
+            if hasattr(st, "secrets"):
+                if provider == "groq":
+                    env_key = str(st.secrets.get("groq_api_key", "") or st.secrets.get("GROQ_API_KEY", "")).strip()
+                else:
+                    env_key = str(st.secrets.get("OPENAI_API_KEY", "")).strip()
+        except Exception:
+            pass
 
     if env_key:
         st.success(f"🔒 System {provider.upper()} API Key Active")

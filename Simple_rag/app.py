@@ -285,11 +285,14 @@ def get_vrag_api_key() -> str:
     env_k = os.getenv("groq_api_key", "").strip() or os.getenv("GROQ_API_KEY", "").strip()
     if env_k:
         return env_k
-    if hasattr(st, "secrets"):
-        if "groq_api_key" in st.secrets:
-            return str(st.secrets["groq_api_key"]).strip()
-        if "GROQ_API_KEY" in st.secrets:
-            return str(st.secrets["GROQ_API_KEY"]).strip()
+    try:
+        if hasattr(st, "secrets"):
+            if "groq_api_key" in st.secrets:
+                return str(st.secrets["groq_api_key"]).strip()
+            if "GROQ_API_KEY" in st.secrets:
+                return str(st.secrets["GROQ_API_KEY"]).strip()
+    except Exception:
+        pass
     return ""
 
 
@@ -421,11 +424,17 @@ with st.sidebar:
     st.markdown("### Configuration")
     st.caption("LLM Provider: Groq API")
 
-    env_has_key = bool(
-        os.getenv("groq_api_key", "").strip()
-        or os.getenv("GROQ_API_KEY", "").strip()
-        or (hasattr(st, "secrets") and ("groq_api_key" in st.secrets or "GROQ_API_KEY" in st.secrets))
-    )
+    def _check_system_key() -> bool:
+        if os.getenv("groq_api_key", "").strip() or os.getenv("GROQ_API_KEY", "").strip():
+            return True
+        try:
+            if hasattr(st, "secrets") and ("groq_api_key" in st.secrets or "GROQ_API_KEY" in st.secrets):
+                return True
+        except Exception:
+            pass
+        return False
+
+    env_has_key = _check_system_key()
 
     if env_has_key:
         st.success("🔒 System Groq API Key Active")
