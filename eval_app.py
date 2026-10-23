@@ -11,6 +11,17 @@ import os
 import sys
 import json
 import streamlit as st
+
+try:
+    st.set_page_config(
+        page_title="GraphRAG Evaluation Dashboard",
+        page_icon=":material/analytics:",
+        layout="wide",
+        initial_sidebar_state="expanded",
+    )
+except Exception:
+    pass
+
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
@@ -31,16 +42,6 @@ load_dotenv(ROOT / ".env", override=False)
 
 DEFAULT_GROQ_KEY = os.getenv("groq_api_key", "") or os.getenv("GROQ_API_KEY", "")
 DEFAULT_OPENAI_KEY = os.getenv("OPENAI_API_KEY", "")
-
-try:
-    st.set_page_config(
-        page_title="GraphRAG Evaluation Dashboard",
-        page_icon=":material/analytics:",
-        layout="wide",
-        initial_sidebar_state="expanded",
-    )
-except Exception:
-    pass
 
 st.markdown("""
 <style>

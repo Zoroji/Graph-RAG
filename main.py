@@ -15,6 +15,17 @@ import os
 from pathlib import Path
 import streamlit as st
 
+# Configure master page settings - MUST be the absolute first Streamlit command
+try:
+    st.set_page_config(
+        page_title="AI Podcast Intelligence Hub",
+        page_icon="🎙️",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+except Exception:
+    pass
+
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "Simple_rag"))
@@ -28,14 +39,6 @@ try:
                 os.environ[k] = v
 except Exception:
     pass
-
-# Configure master page settings
-st.set_page_config(
-    page_title="AI Podcast Intelligence Hub",
-    page_icon="🎙️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
 
 def home_portal():
     # ─── Custom CSS for Premium Glassmorphic Cards ──────────────────────────────

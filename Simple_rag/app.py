@@ -23,20 +23,20 @@ TRANSCRIPTS_DIR = BASE_DIR / "transcripts"
 TRANSCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
 
 try:
-    if hasattr(st, "secrets"):
-        for k, v in st.secrets.items():
-            if isinstance(v, str) and k not in os.environ:
-                os.environ[k] = v
-except Exception:
-    pass
-
-try:
     st.set_page_config(
         page_title="Vector RAG - Podcast Intelligence",
         page_icon=":material/dataset:",
         layout="wide",
         initial_sidebar_state="expanded",
     )
+except Exception:
+    pass
+
+try:
+    if hasattr(st, "secrets"):
+        for k, v in st.secrets.items():
+            if isinstance(v, str) and k not in os.environ:
+                os.environ[k] = v
 except Exception:
     pass
 

@@ -24,16 +24,6 @@ TRANSCRIPTS_DIR = BASE_DIR / "transcripts"
 TRANSCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
 GRAPH_STORE_DIR = BASE_DIR / "graph_store"
 try:
-    if hasattr(st, "secrets"):
-        for k, v in st.secrets.items():
-            if isinstance(v, str) and k not in os.environ:
-                os.environ[k] = v
-except Exception:
-    pass
-
-GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
-
-try:
     st.set_page_config(
         page_title="GraphRAG - Knowledge Graph Intelligence",
         page_icon=":material/hub:",
@@ -42,6 +32,16 @@ try:
     )
 except Exception:
     pass
+
+try:
+    if hasattr(st, "secrets"):
+        for k, v in st.secrets.items():
+            if isinstance(v, str) and k not in os.environ:
+                os.environ[k] = v
+except Exception:
+    pass
+
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 
 # ─── CSS Design System (Graph RAG Theme: Emerald, Teal & Cyan) ────────────────
 st.markdown("""
